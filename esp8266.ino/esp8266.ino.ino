@@ -53,7 +53,7 @@
 #define CONNECTION_TRIES    5
 #define ECHO_COMMANDS // Un-comment to echo AT+ commands to serial monitor.
 
-
+#define TCPCONNECT "AT+CIPSTART=0,\"TCP\",\"parcelapp.herokuapp.com\",80"
 
 #define BUFFER_SIZE 50
 #define CR          13
@@ -63,12 +63,15 @@
 #define TX_BAR 5
 #define RS232_INVERT 1
 
+#define PATIENT true
+#define IMPATIENT false
+
 void clearBuffer(void);
 
 SoftwareSerial barcodeSerial(RX_BAR, TX_BAR, RS232_INVERT);
 
 bool barcodeAvailable = false;
-char* buffer;
+char buffer[BUFFER_SIZE];
 char currIndex = 0;
 byte temp;
 
@@ -87,21 +90,42 @@ void errorHalt(String msg)
 }
 
 // Wait until a char is received from the ESP8266. Then return it. 
-char getChar()
+char getChar(boolean patient)
 {
-  while(esp8266.available() == false)
+  int count=0;
+  int numTimes = 0;
+  int limit;
+
+  if (patient){
+    limit = 200;
+  } else {
+    limit = 50;
+  }
+  
+  while(esp8266.available() == false){
+    if (count > 30000){
+      count = 0;
+      numTimes += 1;
+      //Serial.println(numTimes);
+    } else {
+      count += 1;
+    }
+    if (numTimes > limit){
+      break;
+    }
+  }
     ;
   return esp8266.read();
 }
 
 // Buffer used to compare strings against the output from the ESP8266.
-#define CB_SIZE  20
+#define CB_SIZE  50
 char comp_buffer[CB_SIZE] = {0,}; // Fill buffer with string terminator.
 
 // Get char from ESP8266 and also shift it into the comparison buffer.
-char getCharAndBuffer()
+char getCharAndBuffer(boolean patient)
 {
-  char b = getChar();
+  char b = getChar(patient);
   char *cb_src, *cb_dst;
   cb_src = comp_buffer+1;
   cb_dst = comp_buffer;
@@ -112,16 +136,23 @@ char getCharAndBuffer()
 }
 
 // Compare the string against the newest contents of the buffer.
+/*
 boolean cb_match(String &s)
 {
-  
   char *buf = (char *) malloc(sizeof(char) * (s.length()+1));
   s.toCharArray(buf, s.length() + 1);
   boolean ret = strcmp(buf, comp_buffer + CB_SIZE - 1 - s.length()) == 0; // Return true on match.
   free(buf);
   return ret;
 }
+*/
 
+//TODO: FIX THIS s
+boolean cb_matchE(char *s){
+  boolean ret = strcmp(s,comp_buffer + CB_SIZE - 1 - strlen(s)) == 0;
+  return ret;
+}
+/*
 // Read characters from ESP8266 module and echo to serial until keyword occurs or timeout.
 boolean echoFind(String keyword, boolean do_echo)
 {
@@ -138,16 +169,48 @@ boolean echoFind(String keyword, boolean do_echo)
   }
   return false;  // Timed out
 }
+*/
+boolean echoFindE(char *keyword, boolean do_echo, boolean patient){
+  unsigned long deadline = millis() + TIMEOUT;
+  while (millis() < deadline){
+    char ch = getCharAndBuffer(patient);
+    if (do_echo){
+      Serial.write(ch);
+    } 
+    if (cb_matchE(keyword)) {
+      //Serial.println("findFound");
+      return true;
+    }
+    //Serial.println("findloop");
+  }
+  return false;
+}
+
+boolean echoFindTwoE(char * pos, char * neg, boolean do_echo){
+  unsigned long deadline = millis() + TIMEOUT;
+  while (millis() < deadline){
+    char ch = getCharAndBuffer(IMPATIENT);
+    if (do_echo){
+      Serial.write(ch);
+    } 
+    if (cb_matchE(pos)) {
+      return true;
+    } else if (cb_matchE(neg)){
+      return false;
+    }
+  }
+  return false;
+}
 
 // Echo module output until 3 newlines encountered.
 // (Used when we're indifferent to "OK" vs. "no change" responses.)
-void echoSkip()
+void echoSkip(boolean patient)
 {
-  echoFind("\n", DO_ECHO);        // Search for nl at end of command echo
-  echoFind("\n", DO_ECHO);        // Search for 2nd nl at end of response.
-  echoFind("\n", DO_ECHO);        // Search for 3rd nl at end of blank line.
+  echoFindE("\n", DO_ECHO, patient);        // Search for nl at end of command echo
+  echoFindE("\n", DO_ECHO, patient);        // Search for 2nd nl at end of response.
+  echoFindE("\n", DO_ECHO, patient);        // Search for 3rd nl at end of blank line.
 }
-
+/*
 // Send a command to the module and wait for acknowledgement string
 // (or flush module output if no ack specified).
 // Echoes all data received to the serial monitor.
@@ -159,7 +222,7 @@ boolean echoCommand(String cmd, String ack_str, boolean halt_on_fail)
   esp8266.write("\n");
   
   #ifdef ECHO_COMMANDS
-  Serial.println("\n\n\r--------------------------------------");
+  Serial.println("\n\n\r----");
   Serial.println("COMMAND: \n");
   #endif
 
@@ -186,18 +249,39 @@ boolean echoCommand(String cmd, String ack_str, boolean halt_on_fail)
   free(ack);
   return true;                   // ack blank or ack found
 }
+*/
+
+boolean echoCommandE(char *cmd, char *ack, boolean patient){
+  esp8266.print(cmd);
+  esp8266.write("\r");
+  esp8266.write("\n");
+  Serial.println("\n\n\r----");
+  Serial.print("COMMAND:");
+  Serial.print(cmd);
+  Serial.print("\n");
+  if (strlen(ack) == 0){
+    echoSkip(patient);
+  } else {
+    if (!echoFindE(ack,DO_ECHO,patient)){
+      //Serial.println("Didn't Find");
+      return false;
+    }
+  }
+  //Serial.println("found");
+  return true;
+}
 
 // Data packets have the format "+IPD,0,1024:lwkjfwsnv....". This routine gets
 // the second number preceding the ":" that indicates the number of characters 
 // in the packet.
 int getPacketLength()
 {
-  while(getChar() != ',')
+  while(getChar(IMPATIENT) != ',')
     ;
   char len[10];
   for(int i=0; i<10; i++)
   {
-    char c = getChar();
+    char c = getChar(IMPATIENT);
     if(c == ':')
     {
       len[i] = 0; // Terminate string.
@@ -213,26 +297,19 @@ void echoPacket()
 {
 
   char pop;
-  if(echoFind("+IPD,", NO_ECHO))
+  if(echoFindE("+IPD,", NO_ECHO, IMPATIENT))
   {
-    
     for(int l = getPacketLength(); l>0; l--){
-      pop = getChar();
-      if (pop == '\r'){
-        Serial.write("CR");
-      } else if (pop == '\n'){
-        Serial.write("NL");
-      } else {
-        Serial.write(pop);
-      }
+      pop = getChar(IMPATIENT);
+      Serial.write(pop);
     }
       
   }
 }
 
-boolean getServerResp(String keyword){
-  if (echoFind("+IPD,",NO_ECHO)){
-    if (echoFind(keyword,NO_ECHO)){
+boolean getServerResp(char * pos, char * neg){
+  if (echoFindE("+IPD,",NO_ECHO,IMPATIENT)){
+    if (echoFindTwoE(pos,neg,NO_ECHO)){
       return true;
     }
   }
@@ -241,42 +318,45 @@ boolean getServerResp(String keyword){
 
 
 // Connect to the specified wireless network.
-boolean connectWiFi(String ssid, String pwd)
+boolean connectWiFi()
 {
-  String cmd = "AT+CWJAP=\"Jeremy\",\"potatoes\"";
-  if (echoCommand(cmd, "OK", CONTINUE)) // Join Access Point
+  char *cmd = "AT+CWJAP=\"Jeremy\",\"potatoes\"";
+  if (echoCommandE(cmd, "OK",PATIENT)) // Join Access Point
   {
-    Serial.println("\nConnected to WiFi.");
+    Serial.println("\nwifisuccess");
     return true;
   }
   else
   {
-    Serial.println("\nConnection to WiFi failed.");
+    Serial.println("\nwififail");
     return false;
   }
 }
 
-// Establish a TCP link to a given IP address and port.
-boolean establishTcpLink(String ip, int port)
-{
-  String cmd = "AT+CIPSTART=0,\"TCP\",\"parcelapp.herokuapp.com\",80";
-  return echoCommand(cmd, "OK", CONTINUE);
-}
 
+// Establish a TCP link to a given IP address and port.
+boolean establishTcpLink()
+{
+  
+  return echoCommandE(TCPCONNECT, "OK",IMPATIENT);
+}
+/*
 // Request a page from an HTTP server.
-boolean requestPage(String host, String page, int port)
+boolean requestPage(String host, char *tracking, int port)
 {
   // Create raw HTTP request for web page.
-  //String http_req = "GET " + page + " HTTP/1.1\r\nHost: " + host + ":" + port + "\r\n\r\n";
-  String http_req = "GET /permission?tracking= HTTP/1.1\r\nHost: parcelapp.herokuapp.com:80\r\n\r\n";
-
+  char req_buf[128];
+  sprintf(req_buf, "GET /permission?tracking=%s HTTP/1.1\r\nHost: parcelapp.herokuapp.com:80\r\n\r\n",tracking);
+  String http_req = String(req_buf);
   //Serial.println("Printing http request");
   Serial.println(http_req);
   //Serial.println("Http request length");
   Serial.println(http_req.length());
   // Ready the module to receive raw data.
-  String cmd = "AT+CIPSEND=0,";
-  cmd = cmd + (http_req.length()); // Tell the ESP8266 how long the coming HTTP request is.
+  char cmdbuf[50];
+  sprintf(cmdbuf,"AT+CIPSEND=0,%d",http_req.length());
+  String cmd = String(cmdbuf);
+  //cmd = cmd + (http_req.length()); // Tell the ESP8266 how long the coming HTTP request is.
   Serial.println("About to CIPSEND");
   if (!echoCommand(cmd, ">", CONTINUE))
   {
@@ -286,6 +366,19 @@ boolean requestPage(String host, String page, int port)
   // Send the raw HTTP request.
   return echoCommand(http_req, "OK", CONTINUE);
 }
+*/
+boolean requestPageE(char *tracking){
+  char req_buf[128];
+  sprintf(req_buf, "GET /permission?tracking=%s HTTP/1.1\r\nHost: parcelapp.herokuapp.com:80\r\n\r\n",tracking);
+  char cmdbuf[25];
+  sprintf(cmdbuf,"AT+CIPSEND=0,%d",strlen(req_buf));
+  if(!echoCommandE(cmdbuf,">",IMPATIENT)){
+    echoCommandE("AT+CIPCLOSE","",IMPATIENT);
+    return false;
+  }
+  boolean ret = echoCommandE(req_buf,"OK", IMPATIENT);
+  return ret;
+}
 
 void clearBuffer(void) {
   for (int i = 0; i < BUFFER_SIZE; i++) {
@@ -294,11 +387,9 @@ void clearBuffer(void) {
   currIndex = 0;
 }
 
-
-
 void setup()  
 {
-  delay(5000);
+  delay(1000);
   Serial.begin(9600);  // Initialize serial port to the PC.
 
   // Rename the ESP8266 serial port to something more standard.
@@ -308,7 +399,7 @@ void setup()
   esp8266.begin(9600);
   Serial.begin(SERIAL_BAUD_RATE);     // communication with the host computer
   barcodeSerial.begin(BARCODE_BAUD_RATE);  
-  buffer = (char*)malloc(sizeof(char)*BUFFER_SIZE);
+  //buffer = (char*)malloc(sizeof(char)*BUFFER_SIZE);
   esp8266.listen();
   pinMode(LOCK_CONTROL, OUTPUT);
   digitalWrite(LOCK_CONTROL,LOW);
@@ -323,13 +414,13 @@ void setup()
 
   delay(1000);
 
-  Serial.println("\n\n\n\r----------- ESP8266 Demo -----------\n\n");
+  //Serial.println("\n\n\n\r----------- ESP8266 Demo -----------\n\n");
 
-  echoCommand("AT+RST",      "ready", HALT);      // Reset the module.  
+  echoCommandE("AT+RST",      "ready", PATIENT);      // Reset the module.  
   
   //echoCommand("AT+GMR",      "OK",    CONTINUE);  // Show module's firmware ID. 
-  echoCommand("AT+CWMODE=1", "",      CONTINUE);  // Set module into station mode.
-  echoCommand("AT+CIPMUX=1", "OK",    CONTINUE);  // Allow multiple connections. Necessary for TCP link.
+  echoCommandE("AT+CWMODE=1", "",IMPATIENT);  // Set module into station mode.
+  echoCommandE("AT+CIPMUX=1", "OK",IMPATIENT);  // Allow multiple connections. Necessary for TCP link.
 
   delay(1000);  // Let things settle down for a bit...
 
@@ -338,7 +429,7 @@ void setup()
   // Connect to the Wifi.
   for(int i=1; i<=CONNECTION_TRIES; i++)
   {
-    if(connectWiFi(SSID, PASS))
+    if(connectWiFi())
       break;
     if(i == CONNECTION_TRIES)
       return;
@@ -352,12 +443,13 @@ void setup()
 String tracking = "";
 void loop() 
 {
-
+  int i;
+  /*
   barcodeSerial.listen();
   //wait
   Serial.println("waiting");
   while(!barcodeSerial.available());
-  
+  clearBuffer();
   while (!barcodeAvailable)   {
      if (barcodeSerial.available()){
        temp = barcodeSerial.read();
@@ -368,59 +460,75 @@ void loop()
        } else {
           buffer[currIndex] = temp;
           currIndex++;
+          buffer[currIndex] = '\0';
        }
      }
 
   }
-
+  
   if (barcodeAvailable) {
     Serial.print(buffer);
-    clearBuffer();
-    tracking = String(buffer);
-    clearBuffer();
+    //clearBuffer();
+    //tracking = String(buffer);
+    //clearBuffer();
     barcodeAvailable = false;
   }
-  
+  */
+  delay(2000);
+  sprintf(buffer,"123456789");
   esp8266.listen();
 
-  if (establishTcpLink(DEST_IP, DEST_PORT) == false){
-    Serial.println("restarting");
-    return;
+  for (i=0; i<=CONNECTION_TRIES; i++){
+    if (establishTcpLink()){
+      break;
+    } else if (i==CONNECTION_TRIES) {
+      Serial.println("restarting");
+      clearBuffer();
+      return;
+    }
+    delay(1000);
   }
     
   delay(1000);  // Once again, let the link stabilize.
   // Show the connection status.
   
-  if (echoCommand("AT+CIPSTATUS", "OK",CONTINUE) == false) {
+  if (echoCommandE("AT+CIPSTATUS", "OK", IMPATIENT) == false) {
     Serial.println("restarting");
+    clearBuffer();
     return;
   }
   delay(1000);
 
   //echoCommand("AT+CIPSTO=10", "OK", CONTINUE);
-  
-  //  a page from an HTTP server.
-  //String page = String(DEST_PAGE) + "?tracking=" + tracking;
-  String page = "/permission?tracking=";
-  Serial.println(page);
-  if (requestPage(DEST_HOST, page, DEST_PORT) == false){
-    Serial.println("Rpage, restarting");
-    return;
-  }
+  //char pagebuf[128];
+  //sprintf(pagebuf,"/permission?tracking=%s",buffer);
+  //String page = String(pagebuf);
 
-  //Serial.println("Waiting for server response");
+  for (i=0;i<=1;i++){
+    if (requestPageE(buffer)){
+      break;
+    } else if (i==1){
+      Serial.println("Rpage, restarting");
+      clearBuffer();
+      return;
+    }
+  }
+  clearBuffer();
+
+  Serial.println("wait for resp");
   // Loop forever echoing data received over the Wifi from the HTTP server.
-  if (getServerResp("YES")){
+  if (getServerResp("YES","NO")){
     Serial.println("confirm");
     digitalWrite(LOCK_CONTROL, HIGH); 
-    delay(10000);
+    delay(5000);
     digitalWrite(LOCK_CONTROL, LOW); 
     //echoPacket();
   } else {
     Serial.println("reject");
   }
 
-  echoCommand("AT+CIPCLOSE=0", "OK", CONTINUE);
+  echoCommandE("AT+CIPCLOSE=0", "OK",IMPATIENT);
+  Serial.println("end");
   /*
   while (true){
     echoPacket();
