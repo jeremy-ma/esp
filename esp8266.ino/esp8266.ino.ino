@@ -340,6 +340,39 @@ boolean establishTcpLink()
   
   return echoCommandE(TCPCONNECT, "OK",IMPATIENT);
 }
+
+void playSuccess(){
+  tone(A0,262);
+  delay(300);
+  tone(A0,330);
+  delay(300);
+  tone(A0,392);
+  delay(300);
+  tone(A0,523);
+  delay(300);
+  noTone(A0);
+}
+
+void playFail(){
+  tone(A0,523);
+  delay(300);
+  tone(A0,392);
+  delay(300);
+  tone(A0,330);
+  delay(300);
+  tone(A0,262);
+  delay(300);
+}
+
+void playError(){
+  tone(A0,156);
+  delay(300);
+  tone(A0,130);
+  delay(300);
+  tone(A0,117);
+  delay(300);
+}
+
 /*
 // Request a page from an HTTP server.
 boolean requestPage(String host, char *tracking, int port)
@@ -391,7 +424,7 @@ void setup()
 {
   delay(1000);
   Serial.begin(9600);  // Initialize serial port to the PC.
-
+  pinMode(A0, OUTPUT);
   // Rename the ESP8266 serial port to something more standard.
   // Initialize the serial port to the ESP8266, but also assign the RX & TX lines
   // to specific pins of the ZPUino FPGA. Obviously, this part is not needed when
@@ -444,7 +477,7 @@ String tracking = "";
 void loop() 
 {
   int i;
-  /*
+  tone(A0,440,1000);
   barcodeSerial.listen();
   //wait
   Serial.println("waiting");
@@ -473,9 +506,9 @@ void loop()
     //clearBuffer();
     barcodeAvailable = false;
   }
-  */
-  delay(2000);
-  sprintf(buffer,"123456789");
+  
+  //delay(2000);
+  //sprintf(buffer,"123456789");
   esp8266.listen();
 
   for (i=0; i<=CONNECTION_TRIES; i++){
@@ -519,12 +552,15 @@ void loop()
   // Loop forever echoing data received over the Wifi from the HTTP server.
   if (getServerResp("YES","NO")){
     Serial.println("confirm");
+    playSuccess();
     digitalWrite(LOCK_CONTROL, HIGH); 
+    tone(A0,261,5000);
     delay(5000);
     digitalWrite(LOCK_CONTROL, LOW); 
     //echoPacket();
   } else {
     Serial.println("reject");
+    playFail();
   }
 
   echoCommandE("AT+CIPCLOSE=0", "OK",IMPATIENT);
